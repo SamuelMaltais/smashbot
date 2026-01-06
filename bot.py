@@ -6,8 +6,9 @@ from discord.ext import commands
 from glicko2.glicko2 import Player
 from datetime import datetime
 from dotenv import load_dotenv
+import asyncio
 
-# --- CONFIG ---
+# --- CONFIG ---fais-
 load_dotenv()
 TOKEN = os.environ["TOKEN"]
 GUILD_ID = int(os.environ["GUILD_ID"])
@@ -35,15 +36,47 @@ class SmashBot(commands.Bot):
 
 bot = SmashBot()
 
+class ConfirmMatchView(discord.ui.View):
+    def __init__(self, winner: discord.Member, loser: discord.Member, timeout=120):
+        super().__init__(timeout=timeout)
+        self.winner = winner
+        self.loser = loser
+        self.confirmed = set()
+        self.done = asyncio.Event()  # signal async
+
+
+    @discord.ui.button(label="✅ Confirmer le match", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        if interaction.user.id not in (self.winner.id, self.loser.id):
+            await interaction.response.send_message(
+                "❌ Seuls les joueurs du match peuvent confirmer.",
+                ephemeral=True
+            )
+            return
+
+        self.confirmed.add(interaction.user.id)
+
+        await interaction.response.send_message(
+            f"✅ {interaction.user.display_name} a confirmé.",
+            ephemeral=True
+        )
+
+        # Si les deux ont confirmé → on débloque
+        if len(self.confirmed) == 2:
+            self.done.set()
+            self.stop()
+
+
 # --- COMMANDES ---
 
 # REPORT
-@bot.tree.command(name="report", description="Rapporte le résultat d'un match")
-@app_commands.describe(
-    winner="Nom du gagnant",
-    loser="Nom du perdant"
-)
-async def report(interaction: discord.Interaction, winner: discord.Member, loser: discord.Member):
+@bot.tree.command(name="report", description="Rapporte un match")
+async def report(
+    interaction: discord.Interaction,
+    winner: discord.Member,
+    loser: discord.Member
+):
     if not in_allowed_channel(interaction):
         await interaction.response.send_message(
             MAUVAIS_CHANNEL_STRING,
@@ -51,24 +84,52 @@ async def report(interaction: discord.Interaction, winner: discord.Member, loser
         )
         return
 
+    view = ConfirmMatchView(winner, loser)
+
+    await interaction.response.send_message(
+        f"Match déclaré : {winner.mention} a battu {loser.mention}\n",
+        view=view
+    )
+
+    # ⏳ attente async (NON bloquante)
+    await view.done.wait()
+    
+    if len(view.confirmed) < 2:
+        await interaction.followup.send(
+            "⏰ Temps écoulé — match annulé."
+        )
+        return
+
     p_winner = get_player(winner)
     p_loser = get_player(loser)
-    
+
     p_winner_before = p_winner.rating
     p_loser_before = p_loser.rating
-    
+
     p_winner.update_player([p_loser.rating], [p_loser.rd], [1])
     p_loser.update_player([p_winner.rating], [p_winner.rd], [0])
-    
-    save_players(bot)    
-    log_match(winner, loser, p_winner_before, p_loser_before, p_winner.rating, p_loser.rating)
-        
-    await interaction.response.send_message(
-        f"Match enregistré : {winner.mention} a battu {loser.mention}\n"
-        f"**{winner.display_name}**: {p_winner.rating:.1f} | RD: {p_winner.rd:.1f} \n"
-        f"**{loser.display_name}**: {p_loser.rating:.1f} | RD: {p_loser.rd:.1f}"
+
+    save_players(bot)
+
+    log_match(
+        winner,
+        loser,
+        p_winner_before,
+        p_loser_before,
+        p_winner.rating,
+        p_loser.rating
     )
-  
+
+    await interaction.followup.send(
+        f"✅ Match confirmé !\n"
+        f"{winner.display_name}: {p_winner.rating:.1f}\n"
+        f"{loser.display_name}: {p_loser.rating:.1f}"
+    )
+
+
+
+
+
 # LEADERBOARD
 @bot.tree.command(name="leaderboard", description="Affiche le classement des joueurs")
 async def leaderboard(interaction: discord.Interaction):
@@ -94,11 +155,11 @@ async def leaderboard(interaction: discord.Interaction):
         name = await get_display_name(interaction, discord_id)
 
         lines.append(
-            f"{rank:>2}. {name:<18} | {player.rating:>7.1f} | {player.rd:>6.1f}"
+            f"{rank:>2}. {name[:15]:<15} | {player.rating:>6.4g} | {player.rd:.3g}"
         )
 
-    leaderboard_text = "```text\n   Nom                 | Côte    | DC\n" \
-                   "--------------------------------------\n" + \
+    leaderboard_text = "```text\n   Nom              | Cote    | DC\n" \
+                   "----------------------------------\n" + \
                    "\n".join(lines) + "\n```"
 
     await interaction.response.send_message(leaderboard_text)       
