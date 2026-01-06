@@ -71,11 +71,11 @@ class ConfirmMatchView(discord.ui.View):
 # --- COMMANDES ---
 
 # REPORT
-@bot.tree.command(name="report", description="Rapporte un match")
-async def report(
+@bot.tree.command(name="declare", description="Déclare un match")
+async def declare(
     interaction: discord.Interaction,
-    winner: discord.Member,
-    loser: discord.Member
+    gagnant: discord.Member,
+    perdant: discord.Member
 ):
     if not in_allowed_channel(interaction):
         await interaction.response.send_message(
@@ -84,10 +84,10 @@ async def report(
         )
         return
 
-    view = ConfirmMatchView(winner, loser)
+    view = ConfirmMatchView(gagnant, perdant)
 
     await interaction.response.send_message(
-        f"🥊Match déclaré : {winner.mention} a battu {loser.mention}\n",
+        f"🥊Match déclaré : {gagnant.mention} a battu {perdant.mention}\n",
         view=view
     )
 
@@ -100,8 +100,8 @@ async def report(
         )
         return
 
-    p_winner = get_player(winner)
-    p_loser = get_player(loser)
+    p_winner = get_player(gagnant)
+    p_loser = get_player(perdant)
 
     p_winner_before = p_winner.rating
     p_loser_before = p_loser.rating
@@ -112,8 +112,8 @@ async def report(
     save_players(bot)
 
     log_match(
-        winner,
-        loser,
+        gagnant,
+        perdant,
         p_winner_before,
         p_loser_before,
         p_winner.rating,
@@ -122,8 +122,8 @@ async def report(
 
     await interaction.followup.send(
         f"✅ Match confirmé !\n"
-        f"{winner.display_name}: {p_winner.rating:.1f}\n"
-        f"{loser.display_name}: {p_loser.rating:.1f}"
+        f"{gagnant.display_name}: {p_winner.rating:.1f}\n"
+        f"{perdant.display_name}: {p_loser.rating:.1f}"
     )
 
 
@@ -131,8 +131,8 @@ async def report(
 
 
 # LEADERBOARD
-@bot.tree.command(name="leaderboard", description="Affiche le classement des joueurs")
-async def leaderboard(interaction: discord.Interaction):
+@bot.tree.command(name="classement", description="Affiche le classement des joueurs")
+async def classement(interaction: discord.Interaction):
     if interaction.channel_id != ALLOWED_CHANNEL:
         await interaction.response.send_message(
             MAUVAIS_CHANNEL_STRING,
