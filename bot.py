@@ -87,7 +87,7 @@ async def report(
     view = ConfirmMatchView(winner, loser)
 
     await interaction.response.send_message(
-        f"Match déclaré : {winner.mention} a battu {loser.mention}\n",
+        f"🥊Match déclaré : {winner.mention} a battu {loser.mention}\n",
         view=view
     )
 
