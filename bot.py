@@ -15,6 +15,7 @@ GUILD_ID = int(os.environ["GUILD_ID"])
 ALLOWED_CHANNEL = int(os.environ["ALLOWED_CHANNEL"])
 RESET_ROLE_ID = int(os.environ["RESET_ROLE_ID"])
 MAUVAIS_CHANNEL_STRING = "❌ Commande uniquement dans le canal Smash."
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- INTENTS ---
 intents = discord.Intents.default()
@@ -23,11 +24,12 @@ intents.members = True
 # --- BOT ---
 class SmashBot(commands.Bot):
     def __init__(self):
-        super().__init__(
+        super().__init__( 
             command_prefix="/",   
             intents=intents,
         )        
         self.players = {}
+
 
     async def setup_hook(self):
         guild = discord.Object(id=GUILD_ID)
@@ -37,7 +39,7 @@ class SmashBot(commands.Bot):
 bot = SmashBot()
 
 class ConfirmMatchView(discord.ui.View):
-    def __init__(self, winner: discord.Member, loser: discord.Member, timeout=120):
+    def __init__(self, winner: discord.Member, loser: discord.Member, timeout=1200):
         super().__init__(timeout=timeout)
         self.winner = winner
         self.loser = loser
@@ -84,22 +86,37 @@ async def declare(
         )
         return
 
+    # ✅ Réponse immédiate → évite l'expiration
+    await interaction.response.defer()
+
     view = ConfirmMatchView(gagnant, perdant)
 
-    await interaction.response.send_message(
-        f"🥊Match déclaré : {gagnant.mention} a battu {perdant.mention}\n",
+    # ✅ Premier message via followup
+    await interaction.followup.send(
+        f"🥊 **Match déclaré**\n"
+        f"🥇 Gagnant : {gagnant.mention}\n"
+        f"🥈 Perdant : {perdant.mention}\n\n"
+        "Les deux joueurs doivent confirmer.",
         view=view
     )
 
-    # ⏳ attente async (NON bloquante)
-    await view.done.wait()
-    
-    if len(view.confirmed) < 2:
+    # ⏳ attente async NON bloquante
+    try:
+        await asyncio.wait_for(view.done.wait(), timeout=view.timeout)
+    except asyncio.TimeoutError:
         await interaction.followup.send(
             "⏰ Temps écoulé — match annulé."
         )
         return
 
+    # Sécurité (au cas où)
+    if len(view.confirmed) < 2:
+        await interaction.followup.send(
+            "❌ Confirmation incomplète — match annulé."
+        )
+        return
+
+    # --- GLICKO ---
     p_winner = get_player(gagnant)
     p_loser = get_player(perdant)
 
@@ -120,49 +137,53 @@ async def declare(
         p_loser.rating
     )
 
+    # ✅ Message final
     await interaction.followup.send(
-        f"✅ Match confirmé !\n"
-        f"{gagnant.display_name}: {p_winner.rating:.1f}\n"
-        f"{perdant.display_name}: {p_loser.rating:.1f}"
+        f"✅ **Match confirmé !**\n"
+        f"🥇 {gagnant.display_name} → **{p_winner.rating:.1f}**\n"
+        f"🥈 {perdant.display_name} → **{p_loser.rating:.1f}**"
     )
 
-
-
-
-
-# LEADERBOARD
-@bot.tree.command(name="classement", description="Affiche le classement des joueurs")
+@bot.tree.command(name="classement", description="Affiche le classement")
 async def classement(interaction: discord.Interaction):
+
     if interaction.channel_id != ALLOWED_CHANNEL:
         await interaction.response.send_message(
             MAUVAIS_CHANNEL_STRING,
             ephemeral=True
         )
         return
-    
+
+    # ✅ déférer IMMEDIATEMENT
+    await interaction.response.defer()
+
     if not bot.players:
-        await interaction.response.send_message("Aucun joueur enregistré encore.")
+        await interaction.followup.send("Aucun joueur enregistré.")
         return
 
-        
     sorted_players = sorted(
         bot.players.items(),
-        key=lambda item: (item[1].rating - (2*item[1].rd)),
-        reverse=True)
-    
+        key=lambda item: (item[1].rating - 2 * item[1].rd),
+        reverse=True
+    )
+
     lines = []
     for rank, (discord_id, player) in enumerate(sorted_players, start=1):
         name = await get_display_name(interaction, discord_id)
-
         lines.append(
-            f"{rank:>2}. {name[:15]:<15} | {player.rating:>6.4g} | {player.rd:.3g}"
+            f"{rank:>2}. {name[:15]:<15} | {player.rating:>6.4g} | {player.rd:>5.3g}"
         )
 
-    leaderboard_text = "```text\n   Nom              | Cote    | DC\n" \
-                   "----------------------------------\n" + \
-                   "\n".join(lines) + "\n```"
+    leaderboard_text = (
+        "```text\n"
+        "   Nom              | Côte   | DC\n"
+        "---------------------------------\n"
+        + "\n".join(lines) +
+        "\n```"
+    )
 
-    await interaction.response.send_message(leaderboard_text)       
+    await interaction.followup.send(leaderboard_text)
+    
 
 
 # --- FONCTIONS ANCILLAIRES ---
@@ -172,19 +193,25 @@ def get_player(member):
     return bot.players[member.id]
 
 def load_players(bot, filename="players.json"):
+    path = os.path.join(BASE_DIR, filename)
     try:
-        with open(filename, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+
         for discord_id, stats in data.items():
             p = Player()
             p.setRating(stats["rating"])
             p.setRd(stats["rd"])
             p.setVol(stats["volatility"])
             bot.players[int(discord_id)] = p
+
     except FileNotFoundError:
         bot.players = {}
+
         
 def save_players(bot, filename="players.json"):
+    path = os.path.join(BASE_DIR, filename)
+
     data = {}
     for discord_id, player in bot.players.items():
         data[discord_id] = {
@@ -192,11 +219,22 @@ def save_players(bot, filename="players.json"):
             "rd": player.rd,
             "volatility": player.vol
         }
-    with open(filename, "w") as f:
+
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
 
-def log_match(winner, loser, p_winner_before, p_loser_before, p_winner_after, p_loser_after, filename="historique.json"):
-    
+
+def log_match(
+    winner,
+    loser,
+    p_winner_before,
+    p_loser_before,
+    p_winner_after,
+    p_loser_after,
+    filename="historique.json"
+):
+    path = os.path.join(BASE_DIR, filename)
+
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "winner_id": winner.id,
@@ -206,17 +244,18 @@ def log_match(winner, loser, p_winner_before, p_loser_before, p_winner_after, p_
         "loser_rating_before": p_loser_before,
         "loser_rating_after": p_loser_after,
     }
-        
+
     try:
-        with open(filename, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             history = json.load(f)
     except FileNotFoundError:
         history = []
 
     history.append(entry)
 
-    with open(filename, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=4)
+
         
 async def get_display_name(interaction, discord_id):
     member = interaction.guild.get_member(discord_id)
